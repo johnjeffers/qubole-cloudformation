@@ -1,0 +1,482 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Creates IAM, EC2, and RDS resources required to run Qubole nodes.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Account Settings
+        Parameters:
+          - VpcId
+          - VpcIpRange
+      - Label:
+          default: Qubole Account Settings
+        Parameters:
+          - QuboleUrl
+          - IamRoleName
+          - s3BucketName
+          - QuboleAwsAccount
+          - QuboleExternalId
+      - Label:
+          default: Bastion Host Settings
+        Parameters:
+          - BastionHostEc2TagName
+          - BastionHostInstanceType
+          - BastionHostEbsVolumeSize
+          - BastionHostEc2SubnetId
+          - BastionHostEc2KeyName
+      - Label:
+          default: Metastore RDS Instance Settings
+        Parameters:
+          - RdsInstanceName
+          - RdsDbInstanceClass
+          - RdsUsername
+          - RdsPassword
+          - RdsAllocatedStorage
+          - RdsBackupRetentionPeriod
+          - RdsMySqlVersion
+          - RdsMultiAZ
+          - RdsSubnetGroup
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC that will contain your bastion host and qubole nodes.
+  VpcIpRange:
+    Type: String
+    Description: The CIDR IP range of your VPC (for example, 172.30.0.0/16)
+  QuboleUrl:
+    Type: String
+    Description: Your Qubole account's base URL.
+    AllowedValues:
+      - api.qubole.com
+      - us.qubole.com
+  IamRoleName:
+    Type: String
+    Default: qubole-access
+    Description: Name of the IAM Role to be created. This role will be used in your Account Settings page ("Role ARN"), and will also be applied as an Instance Profile to the bastion host.
+  s3BucketName:
+    Type: String
+    Default: tendril-qubole
+    Description: Name of the s3 bucket used by your Qubole account ("Default Location").
+  QuboleAwsAccount:
+    Type: String
+    Description: Get this from the Account Settings page, "Trusted Principal AWS Account ID".
+  QuboleExternalId:
+    Type: String
+    Description: Get this from the Account Settings page, "External ID"
+  BastionHostEc2TagName:
+    Type: String
+    Default: qubole-bastion-host
+    Description: Value to be applied to EC2 "Name" tag.
+  BastionHostInstanceType:
+    Type: String
+    Default: t2.micro
+    Description: Instance size of the bastion host.
+  BastionHostEbsVolumeSize:
+    Type: Number
+    Default: 20
+    Description: Size (in GB) of the EBS volume for the bastion host.
+    MinValue: 8
+    MaxValue: 2000
+  BastionHostEc2SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public Subnet in which to create the bastion host. Must be a Public subnet, as the bastion host needs a public IP.
+  BastionHostEc2KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: The EC2 Key to use for the bastion host.
+  RdsInstanceName:
+    Type: String
+    Default: qubole-metastore
+    Description: Name of the metastore RDS instance.
+  RdsAllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: Size (in GB) of the metastore RDS instance disk.
+    MinValue: 5
+    MaxValue: 2000
+  RdsBackupRetentionPeriod:
+    Type: Number
+    Default: 3
+    Description: Number of days of RDS backups to keep.
+    MinValue: 0
+    MaxValue: 30
+  RdsDbInstanceClass:
+    Type: String
+    Default: db.t2.small
+    AllowedValues:
+      - db.m3.medium
+      - db.m3.large
+      - db.m3.xlarge
+      - db.m3.2xlarge
+      - db.m4.large
+      - db.m4.xlarge
+      - db.m4.2xlarge
+      - db.r3.large
+      - db.r3.xlarge
+      - db.r3.2xlarge
+      - db.r4.large
+      - db.r4.xlarge
+      - db.r4.2xlarge
+      - db.t2.micro
+      - db.t2.small
+      - db.t2.medium
+      - db.t2.large
+      - db.t2.xlarge
+      - db.t2.2xlarge
+  RdsUsername:
+    Type: String
+    Description: Master user password for metastore RDS instance.
+  RdsPassword:
+    Type: String
+    NoEcho: true
+    Description: Master username for the metastore RDS instance.
+  RdsMySqlVersion:
+    Type: String
+    Default: 5.7.21
+    Description: Version of MySQL to run on the metastore instance.
+    AllowedValues:
+      - 5.7.21
+      - 5.7.19
+      - 5.7.17
+      - 5.7.16
+      - 5.6.39
+      - 5.6.37
+      - 5.6.35
+      - 5.6.34
+      - 5.6.29
+  RdsMultiAZ:
+    Type: String
+    Default: false
+    AllowedValues:
+      - false
+      - true
+    Description: Create the metastore as a Multi-AZ RDS instance?
+  RdsSubnetGroup:
+    Type: String
+    Description: RDS Subnet Group in which to create the metastore RDS instance.
+
+Conditions:
+  QuboleAPI: !Equals [ !Ref QuboleUrl, api.qubole.com ]
+  QuboleUS: !Equals [ !Ref QuboleUrl, us.qubole.com ]
+
+Mappings:
+  RegionMap:
+    ap-northeast-1:
+      AmiId: ami-ff136d99
+    ap-northeast-2:
+      AmiId: ami-da0ba9b4
+    ap-south-1:
+      AmiId: ami-d384d9bc
+    ap-southeast-1:
+      AmiId: ami-e9652995
+    ap-southeast-2:
+      AmiId: ami-db1739b8
+    eu-central-1:
+      AmiId: ami-17157578
+    eu-west-1:
+      AmiId: ami-d8106da1
+    sa-east-1:
+      AmiId: ami-be97ded2
+    us-east-1:
+      AmiId: ami-2cc63b41
+    us-east-2:
+      AmiId: ami-b3b98dd6
+    us-west-1:
+      AmiId: ami-81aea7e1
+    us-west-2:
+      AmiId: ami-1f3cbe67
+
+Resources:
+  s3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${s3BucketName}"
+
+  IamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref IamRoleName
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${QuboleAwsAccount}:root"
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref QuboleExternalId
+
+  IamInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    DependsOn: IamRole
+    Properties:
+      InstanceProfileName: !Ref IamRoleName
+      Roles:
+        - !Ref IamRoleName
+
+  IamPolicyEC2:
+    Type: AWS::IAM::Policy
+    DependsOn: IamRole
+    Properties: 
+      PolicyName: qubole-ec2-access-policy
+      PolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - ec2:AuthorizeSecurityGroupEgress
+              - ec2:AuthorizeSecurityGroupIngress
+              - ec2:AttachVolume
+              - ec2:CancelSpotInstanceRequests
+              - ec2:CreateSecurityGroup
+              - ec2:CreateTags
+              - ec2:CreateVolume
+              - ec2:DeleteSecurityGroup
+              - ec2:DeleteTags
+              - ec2:DeleteVolume
+              - ec2:Describe*
+              - ec2:DescribeVolumes
+              - ec2:DetachVolume
+              - ec2:ImportKeyPair
+              - ec2:DescribeKeyPairs
+              - ec2:ModifyInstanceAttribute
+              - ec2:RequestSpotInstances
+              - ec2:RevokeSecurityGroupIngress
+              - ec2:RunInstances
+              - ec2:StartInstances
+              - ec2:StopInstances
+              - ec2:TerminateInstances
+            Resource:
+              - '*'
+          - Effect: Allow
+            Action:
+              - sts:DecodeAuthorizationMessage
+            Resource:
+              - '*'
+      Roles:
+        - !Ref IamRole
+
+  IamPolicyS3:
+    Type: AWS::IAM::Policy
+    DependsOn:
+      - IamRole
+      - s3Bucket
+    Properties:
+      PolicyName: qubole-s3-access-policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:DeleteObject
+              - s3:GetObject
+              - s3:GetObjectAcl
+              - s3:PutObject
+              - s3:PutObjectAcl
+              - s3:GetBucketAcl
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource:
+              - !Sub "arn:aws:s3:::${s3BucketName}"
+              - !Sub "arn:aws:s3:::${s3BucketName}/*"
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - '*'
+          - Effect: Allow
+            Action: 
+              - s3:ListAllMyBuckets
+            Resource:
+              - '*'
+      Roles:
+        - !Ref IamRole
+
+  IamPolicyCrossAccount:
+    Type: AWS::IAM::Policy
+    DependsOn: IamRole
+    Properties: 
+      PolicyName: qubole-cross-account-policy
+      PolicyDocument: 
+        Version: 2012-10-17
+        Statement: 
+          - Effect: Allow
+            Action:
+              - iam:GetInstanceProfile
+            Resource:
+              - !Sub
+                - arn:aws:iam::${AccountNumber}:instance-profile/${IamRoleName}
+                - AccountNumber: !Ref "AWS::AccountId"
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource:
+              - !Sub
+                - arn:aws:iam::${AccountNumber}:role/${IamRoleName}
+                - AccountNumber: !Ref "AWS::AccountId"
+      Roles:
+        - !Ref IamRole
+
+  ApiEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: QuboleAPI
+    Properties:
+      GroupDescription: Ports required for Qubole Bastion Host
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 7000
+          ToPort: 7000
+          CidrIp: !Ref VpcIpRange
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 54.204.43.32/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 54.243.39.255/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 23.23.178.159/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 54.243.29.190/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 54.243.128.178/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 23.21.153.231/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 23.21.191.84/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 34.205.91.155/32
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 34.205.91.156/30
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 34.205.91.160/28
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 34.205.91.176/29
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 34.205.91.184/31
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 34.205.91.186/32
+      Tags:
+        - Key: Name
+          Value: QuboleBastionHostSG
+      SecurityGroupEgress: []
+
+  UsEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: QuboleUS
+    Properties:
+      GroupDescription: Ports required for Qubole Bastion Host
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 7000
+          ToPort: 7000
+          CidrIp: !Ref VpcIpRange
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 52.44.223.209/32
+      Tags:
+        - Key: Name
+          Value: QuboleBastionHostSG
+      SecurityGroupEgress: []
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - IamRole
+    Properties: 
+      ImageId: !FindInMap [ RegionMap, !Ref "AWS::Region", AmiId ]
+      KeyName: !Ref BastionHostEc2KeyName
+      IamInstanceProfile: !Ref IamRole
+      InstanceType: !Ref BastionHostInstanceType
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: !Ref BastionHostEbsVolumeSize
+            DeleteOnTermination: true
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: true
+          GroupSet:
+            - !If [ QuboleAPI, !Ref ApiEc2SecurityGroup, !Ref UsEc2SecurityGroup ]
+          SubnetId: !Ref BastionHostEc2SubnetId
+      Tags:
+        - Key: Name
+          Value: !Ref BastionHostEc2TagName
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: EC2Instance
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref EC2Instance
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Ports required for Qubole Metastore
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !Ref VpcIpRange
+      Tags:
+        - Key: Name
+          Value: QuboleMetastoreSG
+      SecurityGroupEgress: [] 
+
+  RdsInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      AllocatedStorage: !Ref RdsAllocatedStorage
+      BackupRetentionPeriod: !Ref RdsBackupRetentionPeriod
+      DBInstanceClass: !Ref RdsDbInstanceClass
+      DBInstanceIdentifier: !Ref RdsInstanceName
+      DBName: qubole
+      DBSubnetGroupName: !Ref RdsSubnetGroup
+      Engine: mysql
+      EngineVersion: !Ref RdsMySqlVersion
+      MasterUsername: !Ref RdsUsername
+      MasterUserPassword: !Ref RdsPassword
+      MultiAZ: !Ref RdsMultiAZ
+      Port: 3306
+      PubliclyAccessible: false
+      StorageType: gp2
+      VPCSecurityGroups:
+        - !Ref RdsSecurityGroup
